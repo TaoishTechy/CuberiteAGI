@@ -3,7 +3,7 @@
 
 AGI = AGI or {}
 AGI_States = AGI_States or {}
-local Dialogue = Dialogue or {}
+-- local Dialogue = Dialogue or {} -- REMOVED: This was causing a critical bug by overriding the real Dialogue table.
 local Biology = require("PazuzuTemple/agi_biology")
 
 -- === STUBS for required external functions/logic ===
@@ -12,10 +12,7 @@ function AGI.pos(entity)
   local p = entity:GetPosition() 
   return {x=p.x, y=p.y, z=p.z}
 end
-function Dialogue.say(World, s, msg) 
-  -- Placeholder stub
-  print(string.format("<%s> %s", s.id or "AGI", msg)) 
-end
+-- FIX: Removed the stub for Dialogue.say to ensure the real function from agi_dialogue.lua is used.
 -- === END STUBS ===
 
 -- (F15) Social pheromone field (lightweight cache in world tick)
@@ -37,24 +34,22 @@ end
 -- (F16) Chorus scheduler (time-sliced, not immediate print) building on your call/response
 function AGI.schedule_chorus(World, chorus, lines)
   local delay = 0
+  -- Dialogue is assumed to be a global table set by require() in main.lua
   for i,line in ipairs(lines) do
     local sp = chorus[(i-1)%#chorus+1] -- Cycle through speakers
     -- Schedule a task in the Cuberite world loop
     World:ScheduleTask(delay, function() 
-      Dialogue.say(World, sp, line) 
+      Dialogue.say(World, sp, line) -- Now correctly calls the function from agi_dialogue.lua
     end)
     delay = delay + 10 -- Add 10 ticks (0.5 seconds) delay between speakers
   end
 end
 
--- (F17) Smart Micro-repairs with nudge selection (extends do_small_repairs)
-function AGI.smart_repairs(World, s)
-  local lines = {"...reties a fence.","...patches a hole.","...places a lantern."}
-  Dialogue.emote(World, s, lines[math.random(#lines)])
-  
-  -- Emit a positive pheromone when performing a helpful act
-  AGI.emit_pheromone(World, AGI.pos(s.entity), "oxytocin", 0.2)
-  
-  -- F3: Affective reward for the action
-  Biology.affect(World, s, {rew=0.05, calm=0.05})
+-- (F17) Fast check for proximity
+function AGI.near(pos1, entity2, radius)
+  -- Assumes pos1 is {x,y,z} and entity2 has :GetPosition()
+  local pos2 = entity2:GetPosition()
+  local dx, dy, dz = pos1.x - pos2.x, pos1.y - pos2.y, pos1.z - pos2.z
+  local dist_sq = dx*dx + dy*dy + dz*dz
+  return dist_sq < radius*radius
 end
