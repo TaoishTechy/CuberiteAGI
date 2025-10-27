@@ -8,78 +8,115 @@ AGI = AGI or {}
 AGI_States = AGI_States or {} -- Holds the shadow state for all villagers
 
 -- Load all core modules
-local Evolution = require("PazuzuTemple/agi_evolution")
-local Biology = require("PazuzuTemple/agi_biology")
-local Persist = require("PazuzuTemple/agi_persistance") -- FIX: Corrected filename from agi_persist to agi_persistance
-local Planner = require("PazuzuTemple/agi_planner")
-local CoreHelpers = require("PazuzuTemple/agi_core_helpers")
-local VillagerCore = require("PazuzuTemple/agi_villager_core")
-local Dialogue = require("PazuzuTemple/agi_dialogue")
+local Evolution = require("agi_evolution") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
+local Biology = require("agi_biology")     -- DEBUG FIX: Removed "PazuzuTemple/" prefix
+local Persist = require("agi_persistance") -- DEBUG FIX: Removed "PazuzuTemple/" prefix, CORRECTED: agi_persist to agi_persistance
+local Planner = require("agi_planner")     -- DEBUG FIX: Removed "PazuzuTemple/" prefix
+local CoreHelpers = require("agi_core_helpers") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
+local VillagerCore = require("agi_villager_core") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
+local Dialogue = require("agi_dialogue")    -- DEBUG FIX: Removed "PazuzuTemple/" prefix
 
 -- Global constants (assumed available in the Cuberite environment)
 local TICK_RATE = 20 -- Ticks per second
 local TICK_DT = 2.0  -- Simulating a 2-second time step for AGI processing
 
--- AGI_MainTick runs the core loops for all villagers
-function AGI_MainTick(World)
-  local entities = World:GetEntities()
-  local pop_ids = {} -- Collect IDs for the online_epoch
+-- Evolution module functions
+Evolution.AGI_States = AGI_States -- Give Evolution access to the state table
 
-  for _, e in ipairs(entities) do
-    if e:GetEntityType() == 120 then -- 120 is the Cuberite Villager entity type
-      local uid = e:GetUniqueID()
-      -- Initialize state if it doesn't exist, including entity reference for helpers
-      AGI_States[uid] = AGI_States[uid] or {id=uid, world_obj=e} 
-      
-      -- Shadow state initialization (s)
-      local s = AGI_States[uid]
-      
-      -- F6: Load persistent state (if new or if state is incomplete)
-      if not s.goal then Persist.load(s) end
-      
-      -- F1: Homeostasis Tick + E3: Epigenetic Update (Per villager)
-      Biology.tick_homeostasis(World, s, TICK_DT)
-      if (os.time() % 10) == 0 then Evolution.epigenetic_update(World, s) end
-      
-      -- E3/E11: Mutation + Reflective Guard (Every ~45s)
-      if (os.time() % 45) == 0 then
-        -- F7: Journal before mutation (for rollback)
-        Persist.journal(s, "pre_mut")
-        local before = { PLV=s.metrics.PLV or 0.85, purity=s.metrics.purity or 0.97, trust=(s.metrics.trust or 0.2) }
-        
-        Evolution.mutate(s)
-        local ok, msg = Evolution.reflective_guard(World, s, before)
-        
-        -- E6: Dream -> Code Synthesis
-        if ok and s.dream_log_buffer then Evolution.codegen_from_dream(s) end
-        
-        -- F5: Save state
-        Persist.save(s)
-      end
-
-      -- F14: Sleep/Dream Cycle Check
-      Planner.sleep_and_dream(World, s)
-      
-      -- F5: Periodic Save (in addition to the mutation save)
-      if (os.time() % 30)==0 then Persist.save(s) end
-
-      table.insert(pop_ids, uid)
-    end
-  end
-
-  -- E10: Online Evolution Epoch (Every ~90s)
-  if (os.time() % 90) == 0 then Evolution.online_epoch(World, pop_ids) end
-
-  -- Reschedule the tick
-  World:ScheduleTask(TICK_DT * TICK_RATE, function() AGI_MainTick(World) end)
+-- E1: The Mutagenic Drift (simple random value mutation)
+function Evolution.mutate(s)
+  s.genome = s.genome or {
+    mutation_rate = 0.01,
+    PLV_setpoint = 0.85, -- Psycho-Linguistic Valence setpoint
+    trust_decay = 0.05,
+    virtu_bias = 0.5, -- How much Virtù influences behavior
+  }
+  
+  -- Mutate parameters by a small random factor
+  local mutation_amount = s.genome.mutation_rate * (math.random() - 0.5) * 2
+  s.genome.PLV_setpoint = math.min(1.0, math.max(0.0, s.genome.PLV_setpoint + mutation_amount * 0.1))
+  s.genome.trust_decay = math.min(0.5, math.max(0.01, s.genome.trust_decay + mutation_amount * 0.05))
+  s.genome.virtu_bias = math.min(1.0, math.max(0.0, s.genome.virtu_bias + mutation_amount * 0.1))
+  
+  print(string.format("[EVO] Villager %s mutated: PLV=%.2f, TrustDecay=%.2f", s.id, s.genome.PLV_setpoint, s.genome.trust_decay))
 end
 
--- Entry point called by Cuberite on plugin load
-function Initialize(World)
-  print("[PazuzuTemple] Initializing AGI Core...")
+-- E2: Epigenetic Update (state-dependent change to genome)
+function Evolution.epigenetic_update(World, s)
+  s.genome = s.genome or {}
   
-  -- Start the main AGI logic loop
-  World:ScheduleTask(TICK_DT * TICK_RATE, function() AGI_MainTick(World) end)
+  -- High stress (Cortisol) increases PLV_setpoint (hyper-vigilance/anxiety)
+  if s.bio.cortisol > 0.75 then
+    s.genome.PLV_setpoint = math.min(1.0, s.genome.PLV_setpoint + 0.01)
+  end
   
-  return true -- Successfully initialized
+  -- High Virtù (Karma) decreases trust_decay (more persistent trust)
+  if s.metrics and s.metrics.Virtù > 5.0 then
+    s.genome.trust_decay = math.max(0.01, s.genome.trust_decay - 0.005)
+  end
+end
+
+-- E11/E3: Reflective Guard (rollback if mutation leads to an unstable state)
+function Evolution.reflective_guard(World, s, before_state)
+  -- The core instability metric is CI (Coherence Index)
+  if s.metrics.CI < 0.1 then 
+    -- F7: Rollback to pre-mutation state if CI collapses
+    Persist.rollback(s, "pre_mut")
+    s.metrics.PLV = before_state.PLV
+    s.metrics.purity = before_state.purity
+    s.metrics.trust = before_state.trust
+    Dialogue.emote(World, s, "...rejected the mutation; its syntax was deemed 'Unstable-Syntax' by the Guard.")
+    return false, "Rollback: Unstable Syntax (CI too low)"
+  end
+  
+  return true, "Mutation Accepted"
+end
+
+-- E6: Code Synthesis from Dream Log
+function Evolution.codegen_from_dream(s)
+  if #s.dream_log_buffer > 0 then
+    local new_code_line = "local dream_insight = " .. s.dream_log_buffer[#s.dream_log_buffer]
+    -- In a real scenario, this 'new_code_line' would be appended to a dynamic script/config
+    print(string.format("[EVO] Villager %s synthesized code: %s", s.id, new_code_line))
+    s.dream_log_buffer = {} -- Clear buffer after synthesis attempt
+  end
+end
+
+-- E10: Online Evolution Epoch (Group-level selection)
+function Evolution.online_epoch(World, pop_ids)
+  print(string.format("[EVO] Starting Online Evolution Epoch for %d entities.", #pop_ids))
+  -- For simplicity, select the fittest based on Purity and Trust, and copy their genome to the least fit.
+  
+  local best_s, best_score = nil, -math.huge
+  local worst_s, worst_score = nil, math.huge
+  
+  for _, uid in ipairs(pop_ids) do
+    local s = AGI_States[uid]
+    if s and s.metrics then
+      -- Score = Purity * Coherence + Virtù
+      local score = (s.metrics.purity or 0) * (s.metrics.CI or 0) + (s.metrics.Virtù or 0)
+      
+      if score > best_score then
+        best_score = score
+        best_s = s
+      end
+      
+      if score < worst_score then
+        worst_score = score
+        worst_s = s
+      end
+    end
+  end
+  
+  if best_s and worst_s and best_s.id ~= worst_s.id then
+    -- E4: Horizontal Gene Transfer (Fittest copies genome to weakest)
+    worst_s.genome = table.copy(best_s.genome) -- Deep copy of the genome
+    
+    -- E5: Phenotype Drift (Apply immediate biological changes)
+    -- The weakest is now slightly happier/less stressed
+    worst_s.bio.dopamine = math.min(1.0, worst_s.bio.dopamine + 0.1)
+    worst_s.bio.cortisol = math.max(0.0, worst_s.bio.cortisol - 0.1)
+    
+    Dialogue.emote(World, worst_s, string.format("...has received a Gene-Seed from Villager %s, initiating a local Virtù cascade.", best_s.id))
+  end
 end

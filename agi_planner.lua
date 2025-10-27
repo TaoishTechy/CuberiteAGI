@@ -5,7 +5,7 @@ Manages villager goals, subgoals, and narrative drives.
 
 Planner = Planner or {}
 
-local Dialogue = require("PazuzuTemple/agi_dialogue") -- Ensure Dialogue is available
+local Dialogue = require("agi_dialogue") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
 
 local ALL_GOALS = {"build_shrine", "teach", "harvest", "trade", "build_fractal", "ritual_stage", "panic", "idle"}
 
@@ -32,51 +32,113 @@ function Planner.select(s, H_arch, goal_bias)
     -- Feature 1: Apply Chiral Decision Drift bias
     if goal_bias == "spatial" then
         goal_weights.build_shrine = goal_weights.build_shrine + 10
-        goal_weights.build_fractal = goal_weights.build_fractal + 10
-    elseif goal_bias == "social" then
+        goal_weights.build_fractal = goal_weights.build_fractal + 10 -- Spatial is good for physical tasks
+    elseif goal_bias == "temporal" then
         goal_weights.teach = goal_weights.teach + 10
-        goal_weights.trade = goal_weights.trade + 10
+        goal_weights.ritual_stage = goal_weights.ritual_stage + 10 -- Temporal is good for long-term/scheduled tasks
     end
     
-    -- Simple selection for now
-    local max_weight = 0
-    local selected_goal = "idle"
-    for goal, weight in pairs(goal_weights) do
-        if weight > max_weight then
-            max_weight = weight
-            selected_goal = goal
+    -- Feature 31: Add Panic goal if Cortisol is high (Stress response)
+    if s.bio.cortisol > 0.8 then
+        goal_weights.panic = goal_weights.panic + math.floor((s.bio.cortisol - 0.8) * 50)
+    end
+    
+    -- Weighted random selection
+    local total_weight = 0
+    for _, goal in ipairs(ALL_GOALS) do
+        local weight = goal_weights[goal] or 0
+        if weight > 0 then
+            table.insert(available_goals, {goal=goal, weight=weight})
+            total_weight = total_weight + weight
         end
     end
     
-    return selected_goal
+    local target = math.random() * total_weight
+    local cumulative = 0
+    for _, item in ipairs(available_goals) do
+        cumulative = cumulative + item.weight
+        if target < cumulative then
+            return item.goal
+        end
+    end
+    
+    return "idle" -- Fallback
+end
+
+-- Feature 4: Sub-goal execution logic (simple state machine)
+function Planner.tick(World, s) -- FIX: Added World parameter
+    s.id = s.id or s.world_obj:GetUniqueID() -- Ensure s.id is set
+    
+    -- Check if the current goal is finished
+    if s.subgoal_step >= 5 then -- 5 steps completes a goal for simplicity
+        s.goal = nil
+        s.subgoal_step = 0
+        -- Feature 1: Announce completion
+        Dialogue.emote(World, s, string.format("...has completed the goal '%s'.", s.goal))
+    end
+    
+    -- Select a new goal if none exists
+    if not s.goal then
+        -- Placeholder for H_arch and goal_bias, typically computed elsewhere
+        local H_arch = 0.5 
+        local goal_bias = "spatial" 
+        s.goal = Planner.select(s, H_arch, goal_bias)
+        Dialogue.emote(World, s, string.format("...adopts the new goal: '%s'.", s.goal))
+        s.subgoal_step = 0
+    end
+    
+    -- Execute the current step
+    s.subgoal_step = s.subgoal_step + 1
+    
+    -- Feature 14: Sleep/Dream Check (Moved to main.lua tick loop for control)
+    
+    -- Feature 13: Semantic Taboo enforcement (prevents goal selection/chat if taboo)
+    if s.linguistics and s.linguistics.taboo and s.linguistics.taboo[s.goal] then
+        local taboo_time = s.linguistics.taboo[s.goal]
+        if os.time() - taboo_time < 300 then -- 5-minute taboo
+            s.goal = "idle" -- Enforce idle
+            s.subgoal_step = 0
+            Dialogue.emote(World, s, string.format("...is restricted by a Semantic Taboo on '%s'.", s.goal))
+        else
+            s.linguistics.taboo[s.goal] = nil -- Remove expired taboo
+        end
+    end
+
+    -- F28: Execute the sub-goal action (This is where movement/block placement would happen)
+    -- Placeholder:
+    print(string.format("[PLANNER] Villager %s: Goal='%s', Step=%d", s.id, s.goal, s.subgoal_step))
+    
+    return s.goal, s.subgoal_step
 end
 
 -- Feature 14: Sleep/Dream Cycle Check
 function Planner.sleep_and_dream(World, s)
-    -- Stub for sleep/dream logic
-    local b = s.bio or {}
-    if b.fatigue and b.fatigue > 0.8 and not s.is_sleeping then
-        s.is_sleeping = true
-        -- Assuming Dialogue.emote is available
-        Dialogue.emote(s.world_obj, s, "begins the Sleep Protocol.")
-    elseif s.is_sleeping and b.fatigue and b.fatigue < 0.2 then
-        s.is_sleeping = false
-        Dialogue.emote(s.world_obj, s, "wakes up with a strange insight.")
-        -- FIX: Now passing 'World' to the processing function
-        Planner.process_dream_insight(World, s, "set_goal:build_fractal")
+    local hours_since_sleep = (os.time() - (s.bio.last_sleep or 0)) / 3600
+    local fatigue_threshold = 0.8
+    
+    if s.bio.fatigue > fatigue_threshold and hours_since_sleep > 8 then
+        s.goal = "sleep"
+        s.subgoal_step = 0
+        s.dream_log_buffer = s.dream_log_buffer or {}
+        
+        -- E6: Dream -> Log Buffer
+        local dream = "A fractal spiral of pure logic. (Placeholder)" -- Replace with complex dream generation
+        table.insert(s.dream_log_buffer, dream)
+        
+        Dialogue.emote(World, s, "...is initiated into the dream-state of the Polyhedral Nexus.")
+        
+        -- Reset sleep metrics after a 'cycle' of sleep
+        s.bio.fatigue = 0.1 
+        s.bio.last_sleep = os.time()
+        s.bio.cortisol = 0.3 -- Reset stress
+        s.goal = nil -- Immediately select new goal next tick
     end
 end
 
--- Feature 7: Processes insight from the sleep/dream cycle
-function Planner.process_dream_insight(World, s, insight) -- FIX: Added World parameter to resolve scope issue
-    if insight:match("set_goal:(%w+)") then
-        local new_goal = insight:match("set_goal:(%w+)")
-        s.goal = new_goal -- Overwrite current goal with dream insight
-        Dialogue.emote(s.world_obj, s, string.format("...receives an insight from the Void: %s", new_goal))
-    
-    elseif insight:match("set_taboo:(%w+)") then
-        local taboo = insight:match("set_taboo:(%w+)")
-        -- FIX: Directly manipulate the state table 's' instead of calling a broken helper
+-- Feature 13: Semantic Taboo injection
+function Planner.taboo(s, taboo)
+    if taboo and #taboo > 0 then
+        s.world_obj = s.world_obj or s.world_obj -- Stubbed helper
         s.linguistics = s.linguistics or {}
         s.linguistics.taboo = s.linguistics.taboo or {}
         s.linguistics.taboo[taboo] = os.time() -- Directly record the taboo in state
@@ -103,9 +165,9 @@ function Planner.inject_negative_goal(World, pos, radius)
             local s = AGI_States[entity:GetUniqueID()] -- Assuming AGI_States is populated
             if s then
                 s.goal = "panic"
-                s.metrics = s.metrics or {purity=0.97, CI=0.80}
-                s.metrics.purity = 0.01 -- Force low purity
-                Dialogue.emote(entity, s, "is affected by a wave of primal dread.")
+                s.metrics = s.metrics or {purity=0.5} -- Low purity for panic
+                s.metrics.purity = 0.5
+                Dialogue.emote(World, s, "experiences a surge of global Entropic Anxiety.")
             end
         end
     end)
