@@ -1,0 +1,11 @@
+
+numpy
+scipy
+networkx
+matplotlib
+sympy
+torch
+qutip
+rdkit-pypi
+py3Dmol
+statsmodels

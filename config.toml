@@ -1,0 +1,18 @@
+
+[core]
+tick_interval_ms = 2000
+save_period_seconds = 30
+idle_throttle_rate = 5
+mutation_period = 45
+epoch_period = 90
+
+[persistence]
+backend = "JSON_ATOMIC"
+
+[ethics]
+virtu_min_threshold = 0.05
+
+[evolution]
+guard_plv_decay = 0.95
+guard_purity_decay = 0.90
+guard_virtu_decay = 0.85

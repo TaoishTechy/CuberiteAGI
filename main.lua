@@ -1,122 +1,144 @@
---[[
-  Main entry point for the PazuzuTemple plugin.
-  Initializes global state and schedules the main AGI tick loop.
---]]
 
--- Define global tables expected by the modules if they don't exist
-AGI = AGI or {}
-AGI_States = AGI_States or {} -- Holds the shadow state for all villagers
+local PluginName = "CuberiteAGI-main"
+AGI_States = AGI_States or {}
 
--- Load all core modules
-local Evolution = require("agi_evolution") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
-local Biology = require("agi_biology")     -- DEBUG FIX: Removed "PazuzuTemple/" prefix
-local Persist = require("agi_persistance") -- DEBUG FIX: Removed "PazuzuTemple/" prefix, CORRECTED: agi_persist to agi_persistance
-local Planner = require("agi_planner")     -- DEBUG FIX: Removed "PazuzuTemple/" prefix
-local CoreHelpers = require("agi_core_helpers") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
-local VillagerCore = require("agi_villager_core") -- DEBUG FIX: Removed "PazuzuTemple/" prefix
-local Dialogue = require("agi_dialogue")    -- DEBUG FIX: Removed "PazuzuTemple/" prefix
+local function LogInfo(msg) LOG(string.format("[%s] %s", PluginName, msg)) end
+local function clamp(v, a, b) if not v then return a end if v~=v then return a end if v<a then return a elseif v>b then return b else return v end end
 
--- Global constants (assumed available in the Cuberite environment)
-local TICK_RATE = 20 -- Ticks per second
-local TICK_DT = 2.0  -- Simulating a 2-second time step for AGI processing
+-- Ensure helpers and dialogue are loaded (absolute dofile not used here since this is a drop-in patch)
+-- If your plugin already loads these earlier in Initialize(), you can remove these requires.
+local AGI = require("agi_core_helpers")
+local Dialogue = require("agi_dialogue")
 
--- Evolution module functions
-Evolution.AGI_States = AGI_States -- Give Evolution access to the state table
-
--- E1: The Mutagenic Drift (simple random value mutation)
-function Evolution.mutate(s)
-  s.genome = s.genome or {
-    mutation_rate = 0.01,
-    PLV_setpoint = 0.85, -- Psycho-Linguistic Valence setpoint
-    trust_decay = 0.05,
-    virtu_bias = 0.5, -- How much Virtù influences behavior
-  }
-  
-  -- Mutate parameters by a small random factor
-  local mutation_amount = s.genome.mutation_rate * (math.random() - 0.5) * 2
-  s.genome.PLV_setpoint = math.min(1.0, math.max(0.0, s.genome.PLV_setpoint + mutation_amount * 0.1))
-  s.genome.trust_decay = math.min(0.5, math.max(0.01, s.genome.trust_decay + mutation_amount * 0.05))
-  s.genome.virtu_bias = math.min(1.0, math.max(0.0, s.genome.virtu_bias + mutation_amount * 0.1))
-  
-  print(string.format("[EVO] Villager %s mutated: PLV=%.2f, TrustDecay=%.2f", s.id, s.genome.PLV_setpoint, s.genome.trust_decay))
+-- Pretty bar
+local function bar(label, val)
+  val = clamp(val, 0, 1)
+  local filled = math.floor(val * 20)
+  return string.format("%-10s [%s%s] %3d%%", label, string.rep("#", filled), string.rep("-", 20 - filled), math.floor(val*100))
 end
 
--- E2: Epigenetic Update (state-dependent change to genome)
-function Evolution.epigenetic_update(World, s)
-  s.genome = s.genome or {}
-  
-  -- High stress (Cortisol) increases PLV_setpoint (hyper-vigilance/anxiety)
-  if s.bio.cortisol > 0.75 then
-    s.genome.PLV_setpoint = math.min(1.0, s.genome.PLV_setpoint + 0.01)
-  end
-  
-  -- High Virtù (Karma) decreases trust_decay (more persistent trust)
-  if s.metrics and s.metrics.Virtù > 5.0 then
-    s.genome.trust_decay = math.max(0.01, s.genome.trust_decay - 0.005)
-  end
-end
+-- /villager command (Split, Player)
+local function HandleVillagerCommand(Split, Player)
+  local sub = tostring(Split[2] or "help"):lower()
+  local w = Player:GetWorld()
+  local pos = Player:GetPosition()
+  local VType = cMonster:StringToMobType("villager")
 
--- E11/E3: Reflective Guard (rollback if mutation leads to an unstable state)
-function Evolution.reflective_guard(World, s, before_state)
-  -- The core instability metric is CI (Coherence Index)
-  if s.metrics.CI < 0.1 then 
-    -- F7: Rollback to pre-mutation state if CI collapses
-    Persist.rollback(s, "pre_mut")
-    s.metrics.PLV = before_state.PLV
-    s.metrics.purity = before_state.purity
-    s.metrics.trust = before_state.trust
-    Dialogue.emote(World, s, "...rejected the mutation; its syntax was deemed 'Unstable-Syntax' by the Guard.")
-    return false, "Rollback: Unstable Syntax (CI too low)"
-  end
-  
-  return true, "Mutation Accepted"
-end
-
--- E6: Code Synthesis from Dream Log
-function Evolution.codegen_from_dream(s)
-  if #s.dream_log_buffer > 0 then
-    local new_code_line = "local dream_insight = " .. s.dream_log_buffer[#s.dream_log_buffer]
-    -- In a real scenario, this 'new_code_line' would be appended to a dynamic script/config
-    print(string.format("[EVO] Villager %s synthesized code: %s", s.id, new_code_line))
-    s.dream_log_buffer = {} -- Clear buffer after synthesis attempt
-  end
-end
-
--- E10: Online Evolution Epoch (Group-level selection)
-function Evolution.online_epoch(World, pop_ids)
-  print(string.format("[EVO] Starting Online Evolution Epoch for %d entities.", #pop_ids))
-  -- For simplicity, select the fittest based on Purity and Trust, and copy their genome to the least fit.
-  
-  local best_s, best_score = nil, -math.huge
-  local worst_s, worst_score = nil, math.huge
-  
-  for _, uid in ipairs(pop_ids) do
-    local s = AGI_States[uid]
-    if s and s.metrics then
-      -- Score = Purity * Coherence + Virtù
-      local score = (s.metrics.purity or 0) * (s.metrics.CI or 0) + (s.metrics.Virtù or 0)
-      
-      if score > best_score then
-        best_score = score
-        best_s = s
+  if sub == "spawn" then
+    local count = tonumber(Split[3] or "1") or 1
+    if count < 1 then count = 1 end
+    if count > 20 then count = 20 end
+    local cx = math.floor(pos.x / 16)
+    local cz = math.floor(pos.z / 16)
+    w:ChunkStay({ { cx, cz } }, nil, function()
+      local spawned = 0
+      for i = 1, count do
+        local ox, oz = math.random(-2, 2), math.random(-2, 2)
+        local id = w:SpawnMob(pos.x + ox, pos.y, pos.z + oz, VType, false)
+        if id ~= cEntity.INVALID_ID then
+          spawned = spawned + 1
+          local name = AGI.rand_name()
+          AGI_States[id] = AGI_States[id] or {
+            id = id,
+            name = name,
+            world_obj = w,
+            pos = { x = pos.x, y = pos.y, z = pos.z },
+            bio = { dopamine = 0.5, cortisol = 0.5, serotonin=0.5, oxytocin=0.5 },
+            metrics = { CI = 0.5, PLV = 0.85, purity = 0.97, trust = 0.2 },
+            genome = {},
+            created_at = os.time()
+          }
+          w:DoWithEntityByID(id, function(ent)
+            local m = tolua.cast(ent, "cMonster")
+            if m then
+              m:SetCustomName(name .. " [" .. tostring(id) .. "]")
+              m:SetCustomNameAlwaysVisible(true)
+            end
+            return true
+          end)
+        end
       end
-      
-      if score < worst_score then
-        worst_score = score
-        worst_s = s
-      end
+      Player:SendMessageSuccess(string.format("[AGI] Spawned %d villager(s).", spawned))
+      LogInfo(string.format("Spawned %d villager(s) for %s at (%.1f, %.1f, %.1f)",
+        spawned, Player:GetName(), pos.x, pos.y, pos.z))
+    end)
+    return true
+
+  elseif sub == "inspect" then
+    local key = Split[3]
+    if not key or key == "" then
+      Player:SendMessageInfo("Usage: /villager inspect <id|name>")
+      return true
     end
+    local ent = nil
+    local uid = tonumber(key)
+    if uid then
+      ent = AGI.find_villager_by_id(w, uid)
+    else
+      -- Name may be quoted; join remaining pieces
+      if key:sub(1,1) == '"' then
+        local buf = {}
+        for i=3,#Split do buf[#buf+1] = Split[i] end
+        local joined = table.concat(buf, " ")
+        key = joined:gsub('^"(.*)"$', "%1")
+      end
+      ent = AGI.find_villager_by_name(w, key)
+    end
+    if not ent then
+      Player:SendMessageFailure("[AGI] Villager not found: " .. tostring(key))
+      return true
+    end
+    local id = ent:GetUniqueID()
+    local s = AGI_States[id]
+    local m = tolua.cast(ent, "cMonster")
+    local epos = ent:GetPosition()
+    Player:SendMessageInfo(string.format("§a[AGI] Villager %s (ID %d) at (%.1f, %.1f, %.1f)",
+      (s and (s.name or m:GetCustomName()) or m:GetCustomName() or "Unnamed"), id, epos.x, epos.y, epos.z))
+    if s and s.metrics and s.bio then
+      Player:SendMessageInfo(bar("CI", s.metrics.CI or 0))
+      Player:SendMessageInfo(bar("PLV", s.metrics.PLV or 0))
+      Player:SendMessageInfo(bar("Purity", s.metrics.purity or 0))
+      Player:SendMessageInfo(bar("Trust", s.metrics.trust or 0))
+      Player:SendMessageInfo(bar("Dopamine", s.bio.dopamine or 0))
+      Player:SendMessageInfo(bar("Serotonin", s.bio.serotonin or 0))
+      Player:SendMessageInfo(bar("Oxytocin", s.bio.oxytocin or 0))
+      Player:SendMessageInfo(bar("Cortisol", s.bio.cortisol or 0))
+    else
+      Player:SendMessageInfo("No AGI state yet (will populate on next tick).")
+    end
+    return true
+
+  elseif sub == "status" then
+    -- Show a text "dashboard" like F3
+    local count = 0
+    for k,_ in pairs(AGI_States) do count = count + 1 end
+    Player:SendMessageInfo("§b==== AGI STATUS (PazuzuTemple) ====")
+    Player:SendMessageInfo(string.format("Villagers tracked: %d", count))
+    local sample = 0
+    for id,s in pairs(AGI_States) do
+      if sample >= 6 then break end
+      Player:SendMessageInfo(string.format("• %s [%d]  CI:%.2f PLV:%.2f Pur:%.2f",
+        s.name or ("Villager "..tostring(id)), id,
+        (s.metrics and s.metrics.CI or 0),
+        (s.metrics and s.metrics.PLV or 0),
+        (s.metrics and s.metrics.purity or 0)))
+      sample = sample + 1
+    end
+    Player:SendMessageInfo("Use: /villager inspect <id|\"name\">")
+    return true
   end
-  
-  if best_s and worst_s and best_s.id ~= worst_s.id then
-    -- E4: Horizontal Gene Transfer (Fittest copies genome to weakest)
-    worst_s.genome = table.copy(best_s.genome) -- Deep copy of the genome
-    
-    -- E5: Phenotype Drift (Apply immediate biological changes)
-    -- The weakest is now slightly happier/less stressed
-    worst_s.bio.dopamine = math.min(1.0, worst_s.bio.dopamine + 0.1)
-    worst_s.bio.cortisol = math.max(0.0, worst_s.bio.cortisol - 0.1)
-    
-    Dialogue.emote(World, worst_s, string.format("...has received a Gene-Seed from Villager %s, initiating a local Virtù cascade.", best_s.id))
-  end
+
+  Player:SendMessageInfo("Usage: /villager spawn [count] | /villager inspect <id|\"name\"> | /villager status")
+  return true
+end
+
+function Initialize(Plugin)
+  cPluginManager:BindCommand("/villager", "", HandleVillagerCommand,
+    "AGI villager control: /villager spawn [count] | /villager inspect <id|\"name\"> | /villager status")
+  LogInfo("[PazuzuTemple] Initialized. /villager ready.")
+  return true
+end
+
+function OnDisable()
+  LogInfo("Disabled.")
 end
