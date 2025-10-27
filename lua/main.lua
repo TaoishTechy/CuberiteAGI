@@ -10,7 +10,7 @@ AGI_States = AGI_States or {} -- Holds the shadow state for all villagers
 -- Load all core modules
 local Evolution = require("PazuzuTemple/agi_evolution")
 local Biology = require("PazuzuTemple/agi_biology")
-local Persist = require("PazuzuTemple/agi_persist")
+local Persist = require("PazuzuTemple/agi_persistance") -- FIX: Corrected filename from agi_persist to agi_persistance
 local Planner = require("PazuzuTemple/agi_planner")
 local CoreHelpers = require("PazuzuTemple/agi_core_helpers")
 local VillagerCore = require("PazuzuTemple/agi_villager_core")
@@ -28,25 +28,18 @@ function AGI_MainTick(World)
   for _, e in ipairs(entities) do
     if e:GetEntityType() == 120 then -- 120 is the Cuberite Villager entity type
       local uid = e:GetUniqueID()
-      AGI_States[uid] = AGI_States[uid] or {}
+      -- Initialize state if it doesn't exist, including entity reference for helpers
+      AGI_States[uid] = AGI_States[uid] or {id=uid, world_obj=e} 
       
       -- Shadow state initialization (s)
-      local s = AGI_States[uid].shadow
-      if not s then
-        s = { id=tostring(uid), entity=e, world_obj=World, linguistics={}, trust_map={}, metrics={PLV=0.85, purity=0.97, trust=0.2} }
-        Persist.load(s) -- Load state if file exists, else init
-        Evolution.init_genome(s)
-        Biology.init_state(s)
-        AGI_States[uid].shadow = s
-      end
-
-      -- --- Main AGI Loop Functions (Wiring from original prompt) ---
-
-      -- F1: Homeostasis Loop
+      local s = AGI_States[uid]
+      
+      -- F6: Load persistent state (if new or if state is incomplete)
+      if not s.goal then Persist.load(s) end
+      
+      -- F1: Homeostasis Tick + E3: Epigenetic Update (Per villager)
       Biology.tick_homeostasis(World, s, TICK_DT)
-
-      -- E7: Epigenetic Update (Pheromones → Gene Expression)
-      if (os.time() % 20) == 0 then Evolution.epigenetic_update(World, s) end
+      if (os.time() % 10) == 0 then Evolution.epigenetic_update(World, s) end
       
       -- E3/E11: Mutation + Reflective Guard (Every ~45s)
       if (os.time() % 45) == 0 then
@@ -81,13 +74,12 @@ function AGI_MainTick(World)
   World:ScheduleTask(TICK_DT * TICK_RATE, function() AGI_MainTick(World) end)
 end
 
--- Hook into Cuberite's World started event
-function OnWorldStarted(World)
-  LOG("PazuzuTemple AGI Core v1.0 activated.")
-  -- Start the main AGI loop slightly delayed
+-- Entry point called by Cuberite on plugin load
+function Initialize(World)
+  print("[PazuzuTemple] Initializing AGI Core...")
+  
+  -- Start the main AGI logic loop
   World:ScheduleTask(TICK_DT * TICK_RATE, function() AGI_MainTick(World) end)
   
-  -- F19: Register the damage hook
-  cPluginManager:RegisterHook("OnEntityDamage", VillagerCore.OnDamage)
-  return false
+  return true -- Successfully initialized
 end
