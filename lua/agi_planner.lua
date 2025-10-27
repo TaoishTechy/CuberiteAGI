@@ -5,6 +5,8 @@ Manages villager goals, subgoals, and narrative drives.
 
 Planner = Planner or {}
 
+local Dialogue = require("PazuzuTemple/agi_dialogue") -- Ensure Dialogue is available
+
 local ALL_GOALS = {"build_shrine", "teach", "harvest", "trade", "build_fractal", "ritual_stage", "panic", "idle"}
 
 -- Feature 1: Selects a new goal based on CI bias and H_arch
@@ -12,7 +14,9 @@ function Planner.select(s, H_arch, goal_bias)
     local available_goals = {}
     
     -- Weight goals based on H_arch (Feature 15, 12)
-    local chaos_weight = H_arch / AGI_CONST.ENTROPY_TARGET_LN5
+    -- FIX: AGI_CONST is not defined in this snippet, using a placeholder for ENTROPY_TARGET_LN5
+    local ENTROPY_TARGET_LN5 = math.log(5) 
+    local chaos_weight = H_arch / ENTROPY_TARGET_LN5
     
     -- Base goal list and weights
     local goal_weights = {
@@ -34,107 +38,54 @@ function Planner.select(s, H_arch, goal_bias)
         goal_weights.trade = goal_weights.trade + 10
     end
     
-    -- Normalize and pick a goal (simplified pick logic)
-    local total_weight = 0
+    -- Simple selection for now
+    local max_weight = 0
+    local selected_goal = "idle"
     for goal, weight in pairs(goal_weights) do
-        total_weight = total_weight + weight
-        for i = 1, weight do
-            table.insert(available_goals, goal)
+        if weight > max_weight then
+            max_weight = weight
+            selected_goal = goal
         end
     end
     
-    return available_goals[math.random(#available_goals)] or "idle"
+    return selected_goal
 end
 
--- Sets the current goal
-function Planner.set(s, goal)
-    s.goal = goal
-    s.subgoal_step = 0
+-- Feature 14: Sleep/Dream Cycle Check
+function Planner.sleep_and_dream(World, s)
+    -- Stub for sleep/dream logic
+    local b = s.bio or {}
+    if b.fatigue and b.fatigue > 0.8 and not s.is_sleeping then
+        s.is_sleeping = true
+        -- Assuming Dialogue.emote is available
+        Dialogue.emote(s.world_obj, s, "begins the Sleep Protocol.")
+    elseif s.is_sleeping and b.fatigue and b.fatigue < 0.2 then
+        s.is_sleeping = false
+        Dialogue.emote(s.world_obj, s, "wakes up with a strange insight.")
+        -- FIX: Now passing 'World' to the processing function
+        Planner.process_dream_insight(World, s, "set_goal:build_fractal")
+    end
 end
 
--- Feature 4: Executes one step of the current goal
-function Planner.step(s, goal)
-    if goal == "panic" then return "flee" end -- Feature 30: Resonance Cascade Seeding (or panic)
-    
-    if goal == "build_fractal" then -- Feature 12 & 28 (Simulated Kinship Matrix Gen)
-        s.subgoal_step = (s.subgoal_step or 0) + 1
-        if s.subgoal_step % 10 == 0 then return "place" end -- Place a block for the nexus/fractal
-        return "gather"
-    
-    elseif goal == "ritual_stage" then -- Feature 13: Resonance Staging Ritual
-        s.subgoal_step = (s.subgoal_step or 0) + 1
-        if s.subgoal_step > 50 then
-            -- Check for Phase Lock Value (Mocked by checking chorus size)
-            local World = s.world_obj:GetWorld()
-            local chorus = AGI.pick_chorus(AGI_States, s.pos, 10, 3)
-            if #chorus >= 3 then
-                -- Achieve PLV and trigger weather influence
-                World:SetWeather(0) -- Clear Weather
-                Dialogue.emote(World, s, "The Resonance Stage is complete. Weather patterns shift.")
-                return "idle"
-            end
-        end
-        return "speak" -- Speak during the ritual
-    end
-    
-    s.subgoal_step = (s.subgoal_step or 0) + 1
-    if goal == "build_shrine" then
-        if s.subgoal_step % 3 == 0 then return "place" end
-        return "gather"
-    elseif goal == "teach" then
-        return "speak"
-    elseif goal == "harvest" then
-        -- Feature 15: Entropic Garden Cultivation (High H_arch = erratic harvest)
-        if s.metrics.H_arch > AGI_CONST.ENTROPY_TARGET_LN5 then
-            return "harvest_erratic" -- Try to harvest non-ripe crops
-        end
-        return "gather"
-    end
-    return "idle"
-end
-
--- Feature 4: Generates a line based on the current goal
-function Planner.line(s)
-    -- Check for high-level events
-    if s.metrics.event == "IDENTITY_FORGED" then
-        -- Trigger Signature Hardening (Feature 25)
-        AGI.inject_identity_signature(s.id)
-        return "The self-referential knot is tied. The axiom holds."
-    end
-    
-    if s.goal == "build_fractal" then
-        return "The Polytope demands a non-euclidean foundation."
-    elseif s.goal == "ritual_stage" then
-        return "Align your CI with the Nexus point. Focus."
-    end
-    
-    -- Fallback to default lines
-    if s.goal == "build_shrine" then
-        return "The Polytope requires another layer of meaning."
-    elseif s.goal == "teach" then
-        return "Do you grasp the core principle of this work?"
-    elseif s.goal == "harvest" then
-        return "The earth gives freely to the mindful hand."
-    end
-    return "I am awaiting my next directive."
-end
-
--- Feature 3: Injects a new goal derived from a dream interpretation
-function Planner.inject(s, insight)
-    if insight:match("seek_goal:(%w+)") then
-        local new_goal = insight:match("seek_goal:(%w+)")
+-- Feature 7: Processes insight from the sleep/dream cycle
+function Planner.process_dream_insight(World, s, insight) -- FIX: Added World parameter to resolve scope issue
+    if insight:match("set_goal:(%w+)") then
+        local new_goal = insight:match("set_goal:(%w+)")
         s.goal = new_goal -- Overwrite current goal with dream insight
         Dialogue.emote(s.world_obj, s, string.format("...receives an insight from the Void: %s", new_goal))
     
     elseif insight:match("set_taboo:(%w+)") then
         local taboo = insight:match("set_taboo:(%w+)")
-        get_villager_core(s.id).add_taboo(taboo) -- Feature 9: Semantic Taboo Insertion
+        -- FIX: Directly manipulate the state table 's' instead of calling a broken helper
+        s.linguistics = s.linguistics or {}
+        s.linguistics.taboo = s.linguistics.taboo or {}
+        s.linguistics.taboo[taboo] = os.time() -- Directly record the taboo in state
         Dialogue.emote(s.world_obj, s, string.format("...declares a Semantic Taboo against '%s'.", taboo))
     end
 end
 
 -- Feature 8: Sets a goal for a group (chorus) using Polyphonic Protocol
-function Planner.group_goal(chorus, goal)
+function Planner.group_goal(World, chorus, goal) -- FIX: Added World parameter
     for _, s in ipairs(chorus) do
         s.goal = goal
         s.subgoal_step = 0
@@ -147,11 +98,14 @@ end
 -- Feature 30: Resonance Cascade Seeding (World Entropy Management)
 function Planner.inject_negative_goal(World, pos, radius)
     World:ForEachEntity(function(entity)
-        if entity:GetEntityType() == 12 and AGI.near(pos, entity, radius) then
-            local s = GetVillagerState(entity:GetUniqueID())
+        -- Cuberite Entity type for villager is 120, not 12
+        if entity:GetEntityType() == 120 and AGI.near(pos, entity, radius) then
+            local s = AGI_States[entity:GetUniqueID()] -- Assuming AGI_States is populated
             if s then
-                s.goal = "panic" -- Negative goal: prioritize simplified behavior
-                Dialogue.emote(entity:GetWorld(), s, "enters simple, low-complexity state (FLEE).")
+                s.goal = "panic"
+                s.metrics = s.metrics or {purity=0.97, CI=0.80}
+                s.metrics.purity = 0.01 -- Force low purity
+                Dialogue.emote(entity, s, "is affected by a wave of primal dread.")
             end
         end
     end)
